@@ -53,6 +53,23 @@ parameters:
     scope: cli
     description: Inference device - cpu or cuda
 
+  # Emotion recognition (optional - off by default, adds one extra inference
+  # call per detected person per frame)
+  - name: emotion
+    type: group
+    description: Per-person emotion recognition parameters
+    parameters:
+      - name: enabled
+        type: bool
+        default: false
+        scope: cli
+        description: Run emotion recognition on each detected person's face crop
+      - name: model
+        type: string
+        default: /opt/luxai/qtrobot_yolo_driver/models/enet_b0_8_best_vgaf.onnx
+        scope: cli
+        description: EmotiEffLib ONNX model file (always .onnx - no TensorRT backend for this)
+
   # Camera / RealSense driver connection
   - name: camera
     type: group

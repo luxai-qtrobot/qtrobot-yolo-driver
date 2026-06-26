@@ -31,6 +31,10 @@ as its own process (talks to the rest of QTrobot only over magpie ZMQ, never
 linked into another binary) specifically so AGPL stays contained to this one
 component.
 
+The optional emotion-recognition feature links
+[EmotiEffLib](https://github.com/sb-ai-lab/EmotiEffLib) (Apache-2.0) — a
+separate, more permissive license from the AGPL pieces above.
+
 ---
 
 ## Ports & Topics
@@ -61,11 +65,30 @@ Each frame published on `/yolo/persons` is a `DictFrame`:
         "nose":           {"uv": [u, v], "conf": float},
         "left_eye":       {"uv": [u, v], "conf": float},
         # ... 17 COCO keypoints total (see below)
+      },
+      "emotion": {                         # only present if emotion.enabled and a face was found
+        "label":  "Happiness",             # top predicted class
+        "scores": {
+          "Anger": float, "Contempt": float, "Disgust": float, "Fear": float,
+          "Happiness": float, "Neutral": float, "Sadness": float, "Surprise": float
+        }
       }
     }
   }
 }
 ```
+
+### Emotion recognition (optional)
+
+Disabled by default. When `emotion.enabled: true`, each detected person's
+face is cropped from the nose/eye/ear keypoints and run through
+[EmotiEffLib](https://github.com/sb-ai-lab/EmotiEffLib)'s ONNX backend
+(`enet_b0_8_best_vgaf.onnx`, 8-class, no Contempt-free 7-class variant —
+this driver is scoped to exactly this one model). Scores are softmax
+probabilities (sum to 1), not raw logits, so they're directly usable as
+confidence levels. If too few face keypoints were detected confidently
+enough to locate a face, the `"emotion"` field is simply omitted for that
+person rather than publishing a meaningless prediction.
 
 ### COCO Keypoints
 
@@ -96,6 +119,8 @@ Key fields:
 | `vision.confidence` | `0.6` | YOLO detection threshold |
 | `vision.stream_annotated_image` | `false` | Enables port+2 |
 | `device` | `cpu` | `cpu` or `cuda` — see note below |
+| `emotion.enabled` | `false` | Run emotion recognition on each detected person's face crop |
+| `emotion.model` | `models/enet_b0_8_best_vgaf.onnx` | EmotiEffLib model — always `.onnx`, no TensorRT backend for this |
 | `camera.node_id` | `qtrobot-realsense-driver` | Zeroconf discovery |
 | `camera.endpoint` | `""` | Direct ZMQ override |
 | `zmq.port` | `50770` | Base RPC port |
@@ -182,6 +207,9 @@ ONNX export uses.
 - `tensorrt` backend only: TensorRT + CUDA Toolkit (already present via
   JetPack on Jetson; on x86 you'd need to install TensorRT yourself, or just
   use the `onnx` backend instead, which is the x86 default)
+- `emotion.enabled: true` only: `models/enet_b0_8_best_vgaf.onnx`
+  (always required regardless of pose backend — ONNX Runtime is linked
+  unconditionally for this)
 
 ### Build
 
@@ -195,11 +223,14 @@ make -j$(nproc)
 ```
 
 `CMakeLists.txt` fetches `YOLOs-CPP`/`YOLOs-CPP-TensorRT` and `motcpp` source
-via `FetchContent` (whichever matches the selected backend). The `onnx`
-backend also downloads a prebuilt ONNX Runtime release tarball automatically
-(no manual download needed) — the right architecture (`x64`/`aarch64`) is
-detected from `CMAKE_SYSTEM_PROCESSOR`. The `tensorrt` backend instead finds
-TensorRT/CUDA as ordinary system libraries (JetPack-provided on Jetson).
+via `FetchContent` (whichever matches the selected backend). It also fetches
+`EmotiEffLib` and downloads a prebuilt ONNX Runtime release tarball
+automatically (no manual download needed) — **unconditionally**, regardless
+of `YOLO_DRIVER_BACKEND`, since emotion recognition always uses ONNX Runtime
+even when the pose backend is `tensorrt`. The right ONNX Runtime architecture
+(`x64`/`aarch64`) is detected from `CMAKE_SYSTEM_PROCESSOR`. The `tensorrt`
+pose backend additionally finds TensorRT/CUDA as ordinary system libraries
+(JetPack-provided on Jetson).
 
 ### Install on robot
 

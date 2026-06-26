@@ -5,6 +5,7 @@
 
 #include <qtrobot/yolo_driver_config.hpp>
 #include <qtrobot/pose_backend.hpp>
+#include <qtrobot/emotion_recognizer.hpp>
 
 #include <magpie/nodes/base_node.hpp>
 #include <magpie/nodes/server_node.hpp>
@@ -33,7 +34,8 @@ protected:
 private:
     magpie::Value onRequest(const magpie::Value& req);
     std::string resolveCameraEndpoint();
-    magpie::Value buildPersonsValue(const std::vector<PersonDetection>& persons);
+    magpie::Value buildPersonsValue(const std::vector<PersonDetection>& persons,
+                                     const std::vector<EmotionResult>& emotions);
     void writeAnnotatedImage(const cv::Mat& bgrImage, const std::vector<PersonDetection>& persons);
 
 private:
@@ -50,6 +52,7 @@ private:
     std::unique_ptr<magpie::ZmqStreamWriter> personsWriter_;
     std::unique_ptr<magpie::ZmqStreamWriter> imageWriter_;
     std::unique_ptr<PoseBackend> backend_;
+    std::unique_ptr<EmotionRecognizer> emotionRecognizer_;
 
     magpie::Value sysDescription_;
 };

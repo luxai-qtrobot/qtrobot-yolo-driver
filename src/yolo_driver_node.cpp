@@ -134,6 +134,11 @@ void YoloDriverNode::setup()
         config_.model, config_.confidence, config_.image_size, config_.device == "cuda", config_.num_threads
     );
 
+    if (config_.emotion_enabled) {
+        Logger::info("YoloDriverNode: loading emotion model '" + config_.emotion_model + "'");
+        emotionRecognizer_ = std::make_unique<EmotionRecognizer>(config_.emotion_model);
+    }
+
     std::string cameraEndpoint = resolveCameraEndpoint();
     Logger::info("YoloDriverNode: reading camera color stream from " + cameraEndpoint);
     cameraReader_ = std::make_unique<ZmqStreamReader>(
@@ -214,8 +219,22 @@ void YoloDriverNode::process()
              << " nose_uv=[" << nose.u << "," << nose.v << "] nose_conf=" << nose.confidence;
         Logger::debug(pLog.str());
     }
+
+    std::vector<EmotionResult> emotions;
+    if (emotionRecognizer_ != nullptr) {
+        emotions.reserve(persons.size());
+        for (const auto& p : persons) {
+            cv::Mat faceCrop = EmotionRecognizer::cropFace(bgr, p);
+            if (faceCrop.empty()) {
+                emotions.emplace_back();
+                continue;
+            }
+            emotions.push_back(emotionRecognizer_->predict(faceCrop));
+        }
+    }
+
     if (!persons.empty()) {
-        personsWriter_->write(DictFrame(buildPersonsValue(persons).asDict()), personsTopic);
+        personsWriter_->write(DictFrame(buildPersonsValue(persons, emotions).asDict()), personsTopic);
     }
 
     if (imageWriter_ != nullptr) {
@@ -234,11 +253,13 @@ void YoloDriverNode::cleanup()
 }
 
 
-magpie::Value YoloDriverNode::buildPersonsValue(const std::vector<PersonDetection>& persons)
+magpie::Value YoloDriverNode::buildPersonsValue(const std::vector<PersonDetection>& persons,
+                                                 const std::vector<EmotionResult>& emotions)
 {
     Value::Dict personsDict;
 
-    for (const auto& p : persons) {
+    for (size_t i = 0; i < persons.size(); ++i) {
+        const auto& p = persons[i];
         Value::Dict personEntry;
 
         Value::List bbox;
@@ -261,6 +282,18 @@ magpie::Value YoloDriverNode::buildPersonsValue(const std::vector<PersonDetectio
             keypointsDict[COCO_KEYPOINTS[k]] = Value::fromDict(kpEntry);
         }
         personEntry["keypoints"] = Value::fromDict(keypointsDict);
+
+        if (i < emotions.size() && !emotions[i].scores.empty()) {
+            const auto& emotion = emotions[i];
+            Value::Dict emotionEntry;
+            emotionEntry["label"] = Value::fromString(emotion.topLabel);
+            Value::Dict scoresDict;
+            for (const auto& s : emotion.scores) {
+                scoresDict[s.label] = Value::fromDouble(s.score);
+            }
+            emotionEntry["scores"] = Value::fromDict(scoresDict);
+            personEntry["emotion"] = Value::fromDict(emotionEntry);
+        }
 
         personsDict[std::to_string(p.trackId)] = Value::fromDict(personEntry);
     }
@@ -370,6 +403,8 @@ int main(int argc, char** argv) {
         config.stream_annotated_image = (bool) params["vision.stream_annotated_image"];
         config.num_threads = (int64_t) params["vision.num_threads"];
         config.device      = params.get_string("device");
+        config.emotion_enabled = (bool) params["emotion.enabled"];
+        config.emotion_model   = params.get_string("emotion.model");
         config.camera_node_id = params.get_string("camera.node_id");
         config.camera_endpoint = params.get_string("camera.endpoint");
         config.zmq_port  = (uint16_t) params.get_int("zmq.port");

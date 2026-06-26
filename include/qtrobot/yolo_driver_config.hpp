@@ -18,6 +18,10 @@ struct YoloDriverConfig {
     // ---------- Device ----------
     std::string device = "cpu";       // cpu | cuda - passed straight to YOLOPoseDetector's useGPU flag
 
+    // ---------- Emotion recognition (optional) ----------
+    bool        emotion_enabled = false;
+    std::string emotion_model   = "models/enet_b0_8_best_vgaf.onnx"; // always onnx - EmotiEffLib has no TensorRT backend
+
     // ---------- Camera (qtrobot-realsense-driver connection) ----------
     std::string camera_node_id = "qtrobot-realsense-driver"; // Zeroconf discovery
     std::string camera_endpoint;                              // direct override, e.g. tcp://10.0.0.5:50655
@@ -79,6 +83,23 @@ parameters:
     default: cpu
     scope: cli
     description: Inference device - cpu or cuda. Falls back to cpu automatically if CUDA is requested but unavailable in the linked ONNX Runtime build.
+
+  # Emotion recognition (optional - off by default, adds one extra inference
+  # call per detected person per frame)
+  - name: emotion
+    type: group
+    description: Per-person emotion recognition parameters
+    parameters:
+      - name: enabled
+        type: bool
+        default: false
+        scope: cli
+        description: Run emotion recognition on each detected person's face crop
+      - name: model
+        type: string
+        default: models/enet_b0_8_best_vgaf.onnx
+        scope: cli
+        description: EmotiEffLib ONNX model file (always .onnx - no TensorRT backend for this)
 
   # Camera / RealSense driver connection
   - name: camera

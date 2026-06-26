@@ -37,6 +37,84 @@ set(YOLO_DRIVER_BACKEND ${_yolo_backend_default} CACHE STRING "Pose inference ba
 set_property(CACHE YOLO_DRIVER_BACKEND PROPERTY STRINGS "onnx" "tensorrt")
 message(STATUS "qtrobot-yolo-driver backend: ${YOLO_DRIVER_BACKEND}")
 
+# =========================
+# ONNX Runtime (prebuilt release tarball, not built from source)
+# =========================
+#
+# Unconditional regardless of YOLO_DRIVER_BACKEND: the "onnx" pose backend
+# uses it directly, and the "tensorrt" pose backend still needs it for
+# emotion recognition (EmotiEffLib has no TensorRT backend, only torch/onnx).
+#
+# Single CPU-only build on both platforms for now (per project decision —
+# YOLOs-CPP's own session_base.hpp probes Ort::GetAvailableProviders() at
+# runtime and falls back to CPU automatically if CUDA EP isn't present in
+# the linked build, so this is safe even when device=cuda is requested).
+# A GPU-capable ONNX Runtime build for Jetson is deliberately not pursued —
+# see the "tensorrt" pose backend instead, which uses what JetPack already ships.
+set(ONNXRUNTIME_VERSION "1.20.1")
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_ort_arch "x64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_ort_arch "aarch64")
+else()
+    message(FATAL_ERROR "Unsupported architecture for ONNX Runtime: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
+FetchContent_Declare(onnxruntime
+    URL https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${_ort_arch}-${ONNXRUNTIME_VERSION}.tgz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(onnxruntime)
+set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
+set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
+
+# Upstream packaging bug in the official ONNX Runtime v1.20.1 Linux release
+# tarball: its own bundled CMake package
+# (lib/cmake/onnxruntime/onnxruntimeTargets-release.cmake) hardcodes the
+# library at "lib64/libonnxruntime.so.1.20.1", but the tarball actually
+# ships everything under "lib/". EmotiEffLib's CMakeLists.txt below calls
+# find_package(onnxruntime REQUIRED), which fails outright on this mismatch.
+# Not a patch to any vendored/third-party file — just aliasing the path
+# their generated config expects to the files that are actually here.
+if(NOT EXISTS ${ONNXRUNTIME_DIR}/lib64)
+    file(CREATE_LINK ${ONNXRUNTIME_DIR}/lib ${ONNXRUNTIME_DIR}/lib64 SYMBOLIC)
+endif()
+
+# =========================
+# EmotiEffLib (emotion recognition, optional at runtime via emotion.enabled —
+# always compiled in, always uses the ONNX Runtime above regardless of pose
+# backend). Apache-2.0, proper CMake library target (unlike YOLOs-CPP), so a
+# normal FetchContent_MakeAvailable + add_subdirectory works directly.
+# =========================
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_ONNX ${ONNXRUNTIME_DIR} CACHE PATH "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(emotiefflib
+    GIT_REPOSITORY https://github.com/sb-ai-lab/EmotiEffLib.git
+    # Not the v1.1.1 tag: its facial_analysis.cpp includes both the torch
+    # and onnx backend headers unconditionally, so it fails to build
+    # whenever only one of WITH_TORCH/WITH_ONNX is enabled (our case — onnx
+    # only). Not main HEAD either: a later commit bumps the vendored
+    # xtl/xtensor submodules to versions requiring CMake 3.29. Pinned to the
+    # commit right after v1.1.1 that fixes the include guards but predates
+    # that submodule bump.
+    GIT_TAG        2f1bf61
+    GIT_SUBMODULES_RECURSE TRUE
+    SOURCE_SUBDIR  emotieffcpplib
+)
+FetchContent_MakeAvailable(emotiefflib)
+
+# At this pinned commit, EmotiEffLib's own facial_analysis.cpp is
+# internally inconsistent: getAvailableBackends()/checkBackend() check
+# #ifdef WITH_ONNX (which we do define, above), but createInstance() checks
+# #elif defined(USE_ONNXRUNTIME) instead — a different macro name, never
+# defined by their own CMakeLists.txt under any option. Without this,
+# checkBackend("onnx") succeeds but createInstance() then always falls
+# through to "wasn't compiled with any backend support." Defining it
+# ourselves for their target is configuration, not a patch to their files.
+target_compile_definitions(emotiefflib PRIVATE USE_ONNXRUNTIME)
+
 if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
 
     # =========================
@@ -57,33 +135,6 @@ if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
     if(NOT yolos_cpp_POPULATED)
         FetchContent_Populate(yolos_cpp)
     endif()
-
-    # =========================
-    # ONNX Runtime (prebuilt release tarball, not built from source)
-    # =========================
-    #
-    # Single CPU-only build on both platforms for now (per project decision —
-    # YOLOs-CPP's own session_base.hpp probes Ort::GetAvailableProviders() at
-    # runtime and falls back to CPU automatically if CUDA EP isn't present in
-    # the linked build, so this is safe even when device=cuda is requested).
-    # A GPU-capable ONNX Runtime build for Jetson is deliberately not pursued —
-    # see the "tensorrt" backend instead, which uses what JetPack already ships.
-    set(ONNXRUNTIME_VERSION "1.20.1")
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-        set(_ort_arch "x64")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-        set(_ort_arch "aarch64")
-    else()
-        message(FATAL_ERROR "Unsupported architecture for ONNX Runtime: ${CMAKE_SYSTEM_PROCESSOR}")
-    endif()
-
-    FetchContent_Declare(onnxruntime
-        URL https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${_ort_arch}-${ONNXRUNTIME_VERSION}.tgz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    FetchContent_MakeAvailable(onnxruntime)
-    set(ONNXRUNTIME_DIR ${onnxruntime_SOURCE_DIR})
-    set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
 
     set(_pose_backend_sources src/fast_pose_detector.cpp src/pose_backend_onnx.cpp)
     set(_pose_backend_include_dirs ${yolos_cpp_SOURCE_DIR}/include ${ONNXRUNTIME_DIR}/include)
@@ -222,6 +273,7 @@ FetchContent_MakeAvailable(motcpp)
 add_executable(qtrobot_yolo_driver
     src/utility.cpp
     src/yolo_driver_node.cpp
+    src/emotion_recognizer.cpp
     ${_pose_backend_sources}
 )
 
@@ -240,24 +292,27 @@ target_link_libraries(qtrobot_yolo_driver
         magpie::magpie
         paramify::paramify
         motcpp::motcpp
+        emotiefflib
         ${OpenCV_LIBS}
         ${_pose_backend_link_libs}
 )
 
-if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
-    # ONNX Runtime ships as a shared library with no soname-based discovery —
-    # same RPATH approach YOLOs-CPP's own build uses, so the binary finds
-    # libonnxruntime.so without needing LD_LIBRARY_PATH set at runtime.
-    # BUILD_RPATH points at the FetchContent-fetched copy (for running directly
-    # out of the build tree); INSTALL_RPATH must point at where install() below
-    # actually places the bundled .so on the target machine, not the build tree.
-    set_target_properties(qtrobot_yolo_driver PROPERTIES
-        BUILD_RPATH   "${ONNXRUNTIME_DIR}/lib"
-        INSTALL_RPATH "${LUXAI_PREFIX}/lib"
-    )
-endif()
-# tensorrt backend needs no equivalent RPATH: TensorRT/CUDA come from JetPack's
-# standard system library paths already on the loader's default search path.
+target_include_directories(qtrobot_yolo_driver
+    PRIVATE
+        ${emotiefflib_SOURCE_DIR}/emotieffcpplib/include
+)
+
+# ONNX Runtime ships as a shared library with no soname-based discovery — same
+# RPATH approach YOLOs-CPP's own build uses, so the binary finds
+# libonnxruntime.so without needing LD_LIBRARY_PATH set at runtime. Needed
+# regardless of YOLO_DRIVER_BACKEND now, since emotiefflib always links it.
+# BUILD_RPATH points at the FetchContent-fetched copy (for running directly
+# out of the build tree); INSTALL_RPATH must point at where install() below
+# actually places the bundled .so on the target machine, not the build tree.
+set_target_properties(qtrobot_yolo_driver PROPERTIES
+    BUILD_RPATH   "${ONNXRUNTIME_DIR}/lib"
+    INSTALL_RPATH "${LUXAI_PREFIX}/lib"
+)
 
 # =========================
 # Install rules
@@ -272,29 +327,30 @@ install(FILES
     DESTINATION ${LUXAI_PREFIX}/etc
 )
 
-# Only ship the model file the compiled-in backend actually loads — models/
+# Ship exactly two model files, named explicitly (no blanket extension
+# globs): the pose model in whichever format the compiled-in backend loads,
+# plus the emotion model, which is always ONNX regardless of pose backend.
 if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
-    set(_model_pattern "*.onnx")
+    set(_pose_model_ext ".onnx")
 else()
-    set(_model_pattern "*.trt")
+    set(_pose_model_ext ".trt")
 endif()
-install(DIRECTORY
-    models/
+install(FILES
+    models/yolo26n-pose${_pose_model_ext}
+    models/enet_b0_8_best_vgaf.onnx
     DESTINATION ${LUXAI_PREFIX}/models
-    FILES_MATCHING PATTERN "${_model_pattern}"
 )
 
-if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
-    # install(FILES) on a single symlink (libonnxruntime.so) only copies the
-    # symlink itself, not the real file it (transitively) points to —
-    # libonnxruntime.so -> libonnxruntime.so.1 -> libonnxruntime.so.1.20.1.
-    # install(DIRECTORY) preserves the whole symlink chain correctly.
-    install(DIRECTORY
-        ${ONNXRUNTIME_DIR}/lib/
-        DESTINATION ${LUXAI_PREFIX}/lib
-        FILES_MATCHING PATTERN "*.so*"
-    )
-endif()
+# install(FILES) on a single symlink (libonnxruntime.so) only copies the
+# symlink itself, not the real file it (transitively) points to —
+# libonnxruntime.so -> libonnxruntime.so.1 -> libonnxruntime.so.1.20.1.
+# install(DIRECTORY) preserves the whole symlink chain correctly. Needed
+# regardless of YOLO_DRIVER_BACKEND now, since emotiefflib always links it.
+install(DIRECTORY
+    ${ONNXRUNTIME_DIR}/lib/
+    DESTINATION ${LUXAI_PREFIX}/lib
+    FILES_MATCHING PATTERN "*.so*"
+)
 
 install(FILES
     packaging/qtrobot-yolo-driver.service
@@ -348,18 +404,18 @@ endif()
 # dpkg-shlibdeps inspect the actual binary and resolve the right package(s)
 # automatically.
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
-    # libonnxruntime.so ships inside the package itself (installed to
-    # ${LUXAI_PREFIX}/lib, see install() above + RPATH) since it's not a
-    # regular apt package on either platform. dpkg-shlibdeps would otherwise
-    # also try (and fail) to find a system package providing it —
-    # CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS tells it that directory's
-    # libraries are private/bundled, not a missing dependency.
-    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${LUXAI_PREFIX}/lib")
-endif()
-# tensorrt backend needs no such private-dirs entry: nvinfer/cudart are
-# regular system libraries on Jetson (from JetPack), so dpkg-shlibdeps
-# resolves them as ordinary (if unversioned-package-name) dependencies.
+# libonnxruntime.so ships inside the package itself (installed to
+# ${LUXAI_PREFIX}/lib, see install() above + RPATH) since it's not a regular
+# apt package on either platform — needed unconditionally now since
+# emotiefflib always links ONNX Runtime regardless of pose backend.
+# dpkg-shlibdeps would otherwise also try (and fail) to find a system
+# package providing it — CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS tells it
+# that directory's libraries are private/bundled, not a missing dependency.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${LUXAI_PREFIX}/lib")
+# tensorrt backend's pose path needs no additional private-dirs entry:
+# nvinfer/cudart are regular system libraries on Jetson (from JetPack), so
+# dpkg-shlibdeps resolves them as ordinary (if unversioned-package-name)
+# dependencies.
 set(CPACK_DEBIAN_PACKAGE_DEPENDS
     "libmagpie (>= 0.7),
      libyaml-cpp0.6 | libyaml-cpp0.7 | libyaml-cpp0.8,
