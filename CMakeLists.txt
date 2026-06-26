@@ -294,21 +294,6 @@ install(FILES
     DESTINATION /lib/systemd/system
 )
 
-# postinst needs to know which backend this package was built for (to decide
-# whether to run the .onnx -> .trt trtexec conversion step) — generate it from
-# a template instead of using a static file. configure_file() doesn't reliably
-# preserve the executable bit across CMake versions, so set it explicitly —
-# dpkg requires maintainer scripts to be executable.
-configure_file(
-    packaging/postinst.in
-    ${CMAKE_CURRENT_BINARY_DIR}/postinst
-    @ONLY
-    FILE_PERMISSIONS
-        OWNER_READ OWNER_WRITE OWNER_EXECUTE
-        GROUP_READ GROUP_EXECUTE
-        WORLD_READ WORLD_EXECUTE
-)
-
 # =========================
 # CPack (Debian)
 # =========================
@@ -378,7 +363,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS
 # Maintainer scripts
 # -------------------------
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
-    ${CMAKE_CURRENT_BINARY_DIR}/postinst
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/postinst
     ${CMAKE_CURRENT_SOURCE_DIR}/packaging/prerm
 )
 

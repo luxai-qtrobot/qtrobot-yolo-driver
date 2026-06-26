@@ -8,7 +8,7 @@ namespace qtrobot::yolo {
 struct YoloDriverConfig {
 
     // ---------- Vision ----------
-    std::string model       = "models/yolo26n-pose.onnx";
+    std::string model       = "models/yolo26n-pose"; // no extension - backend appends .onnx or .trt
     int         framerate   = 10;     // Hz - max detection rate
     float       confidence  = 0.6f;   // YOLO detection threshold
     int         image_size  = 640;    // YOLO input size
@@ -45,9 +45,9 @@ parameters:
     parameters:
       - name: model
         type: string
-        default: models/yolo26n-pose.onnx
+        default: models/yolo26n-pose
         scope: cli
-        description: YOLO pose model file (.onnx)
+        description: YOLO pose model file, no extension - the backend compiled in (onnx or tensorrt) appends .onnx or .trt
       - name: framerate
         type: int
         default: 10

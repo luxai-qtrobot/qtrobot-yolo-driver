@@ -91,7 +91,7 @@ Key fields:
 
 | Field | Default | Notes |
 |---|---|---|
-| `vision.model` | `models/yolo26n-pose.onnx` | YOLO pose model file |
+| `vision.model` | `models/yolo26n-pose` | Model path, **no extension** — the backend compiled in appends `.onnx` or `.trt` |
 | `vision.framerate` | `5` | Max detection rate (Hz) |
 | `vision.confidence` | `0.6` | YOLO detection threshold |
 | `vision.stream_annotated_image` | `false` | Enables port+2 |
@@ -130,29 +130,45 @@ CUDA architecture (`sm_87` for Orin, `sm_72` for Xavier) — no source build,
 no container extraction, no version-matching risk the way ONNX Runtime's
 CUDA EP would need.
 
-### The `tensorrt` backend needs a `.trt` engine, converted on-device
+### The `tensorrt` backend needs a `.trt` engine
 
 `.trt` engines are **not portable** like `.onnx` is — they're tied to the
 exact GPU and exact TensorRT version that built them, and TensorRT will
 often refuse to load a mismatched one outright rather than degrade
-gracefully. So instead of shipping a `.trt` file in the package (fragile —
-breaks on the next JetPack/TensorRT update), `vision.model` still points at
-a `.onnx` file (the same one the `onnx` backend uses), and:
+gracefully. That matters if you're building a package meant to run on
+varying/unknown hardware — but if you're building for one specific, known
+device (e.g. a fixed-hardware robot you control, always the same JetPack
+version), it's simplest to just convert the engine **once** and ship it
+directly in `models/` alongside the `.onnx` — `install(DIRECTORY models/
+...)` already packages whatever's in that directory, `.trt` included, no
+extra CMake/postinst wiring needed. The only thing to remember: if this
+device's JetPack/TensorRT version ever changes, regenerate the `.trt` and
+rebuild the package — same as rebuilding for any other underlying platform
+change.
 
-- The `tensorrt` backend derives the engine path itself: `.../foo.onnx` →
-  loads `.../foo.trt` (same directory, same basename, swapped extension).
-- `postinst` converts it automatically on first install, via `trtexec`
-  (already on the system with JetPack's TensorRT) — `--fp16`, skipped if a
-  `.trt` file already exists, degrades to a warning (not an install failure)
-  if `trtexec` isn't found.
+`vision.model` itself has no extension (e.g. `models/yolo26n-pose`) —
+whichever backend is compiled in appends its own: `.onnx` for the `onnx`
+backend, `.trt` for `tensorrt`. So the same config value works unchanged
+for either backend, as long as both `models/yolo26n-pose.onnx` and
+`models/yolo26n-pose.trt` exist where it points.
 
-To convert manually instead (e.g. after swapping in a different model):
+To convert (on the exact target device, or a hardware/JetPack-identical one):
 
 ```bash
-trtexec --onnx=/opt/luxai/qtrobot_yolo_driver/models/yolo26n-pose.onnx \
-        --saveEngine=/opt/luxai/qtrobot_yolo_driver/models/yolo26n-pose.trt \
-        --fp16
+trtexec --onnx=models/yolo26n-pose.onnx \
+        --saveEngine=models/yolo26n-pose.trt \
+        --fp16 \
+        --shapes=images:1x3x640x640
 ```
+
+`--shapes` is required because this model's ONNX export has a **dynamic
+input shape** — `trtexec` silently defaults unspecified dynamic dims to a
+degenerate `1x1` and fails to build (an internal concat-layer assertion)
+without it. Since this driver always runs at one fixed size
+(`vision.image_size`, default `640`), a fixed-shape engine for that one size
+is what we actually want anyway — adjust the `640`s if you change
+`vision.image_size`. `images` is the input tensor name ultralytics' own YOLO
+ONNX export uses.
 
 ---
 

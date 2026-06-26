@@ -17,12 +17,13 @@ struct PoseBackend::Impl {
     {}
 };
 
+// vision.model has no extension - each backend appends its own.
 PoseBackend::PoseBackend(const std::string& modelPath,
                           float confidence,
                           int /*imageSize*/,
                           bool useGPU,
                           int numThreads)
-    : impl_(std::make_unique<Impl>(modelPath, useGPU, numThreads))
+    : impl_(std::make_unique<Impl>(modelPath + ".onnx", useGPU, numThreads))
     , confidence_(confidence)
 {}
 

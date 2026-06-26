@@ -5,24 +5,6 @@
 
 namespace qtrobot::yolo {
 
-namespace {
-// vision.model defaults to a .onnx path (same config field used by the onnx
-// backend, and the .onnx file postinst's trtexec conversion reads from) — the
-// TensorRT backend loads the sibling .trt engine instead, so this derives
-// "<dir>/<name>.trt" from "<dir>/<name>.onnx" without needing a separate
-// config field. If modelPath doesn't end in .onnx, it's used unmodified
-// (assume the user already pointed it straight at a .trt engine).
-std::string deriveEnginePath(const std::string& modelPath) {
-    constexpr const char* kOnnxSuffix = ".onnx";
-    const size_t suffixLen = 5; // strlen(".onnx")
-    if (modelPath.size() > suffixLen &&
-        modelPath.compare(modelPath.size() - suffixLen, suffixLen, kOnnxSuffix) == 0) {
-        return modelPath.substr(0, modelPath.size() - suffixLen) + ".trt";
-    }
-    return modelPath;
-}
-}
-
 struct PoseBackend::Impl {
     yolos::pose::YOLOPoseDetector detector;
     motcpp::trackers::ByteTrack tracker;
@@ -33,12 +15,13 @@ struct PoseBackend::Impl {
     {}
 };
 
+// vision.model has no extension - each backend appends its own.
 PoseBackend::PoseBackend(const std::string& modelPath,
                           float confidence,
                           int /*imageSize*/,
                           bool /*useGPU*/,    // TensorRT is GPU-only by construction
                           int /*numThreads*/) // no CPU thread pool concept here
-    : impl_(std::make_unique<Impl>(deriveEnginePath(modelPath)))
+    : impl_(std::make_unique<Impl>(modelPath + ".trt"))
     , confidence_(confidence)
 {}
 

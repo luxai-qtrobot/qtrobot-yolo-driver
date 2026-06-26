@@ -179,14 +179,13 @@ void YoloDriverNode::process()
         std::this_thread::sleep_for(std::chrono::seconds(1));
         return;
     }
-    Logger::debug("YoloDriverNode: got camera frame on topic '" + topic + "'");
+    // Logger::debug("YoloDriverNode: got camera frame on topic '" + topic + "'");
 
-    auto now = std::chrono::duration<double>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
+    auto now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     if (now - lastFrameTs_ < frameIntervalSec_) {
         return;
     }
+
     lastFrameTs_ = now;
 
     auto* img = dynamic_cast<ImageFrameRaw*>(frame.get());
@@ -215,7 +214,9 @@ void YoloDriverNode::process()
              << " nose_uv=[" << nose.u << "," << nose.v << "] nose_conf=" << nose.confidence;
         Logger::debug(pLog.str());
     }
-    personsWriter_->write(DictFrame(buildPersonsValue(persons).asDict()), personsTopic);
+    if (!persons.empty()) {
+        personsWriter_->write(DictFrame(buildPersonsValue(persons).asDict()), personsTopic);
+    }
 
     if (imageWriter_ != nullptr) {
         writeAnnotatedImage(bgr, persons);

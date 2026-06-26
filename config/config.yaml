@@ -14,9 +14,9 @@ parameters:
     parameters:
       - name: model
         type: string
-        default: /opt/luxai/qtrobot_yolo_driver/models/yolo26n-pose.onnx
+        default: /opt/luxai/qtrobot_yolo_driver/models/yolo26n-pose
         scope: cli
-        description: YOLO pose model file (.onnx)
+        description: YOLO pose model file, no extension - the backend compiled in (onnx or tensorrt) appends .onnx or .trt
       - name: framerate
         type: int
         default: 5
