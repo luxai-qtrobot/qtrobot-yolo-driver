@@ -272,9 +272,16 @@ install(FILES
     DESTINATION ${LUXAI_PREFIX}/etc
 )
 
+# Only ship the model file the compiled-in backend actually loads — models/
+if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
+    set(_model_pattern "*.onnx")
+else()
+    set(_model_pattern "*.trt")
+endif()
 install(DIRECTORY
     models/
     DESTINATION ${LUXAI_PREFIX}/models
+    FILES_MATCHING PATTERN "${_model_pattern}"
 )
 
 if(YOLO_DRIVER_BACKEND STREQUAL "onnx")
