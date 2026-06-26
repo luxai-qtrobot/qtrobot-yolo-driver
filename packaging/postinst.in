@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+MODEL_DIR=/opt/luxai/qtrobot_yolo_driver/models
+mkdir -p "$MODEL_DIR"
+
+# Generated from postinst.in by CMake (configure_file) — @YOLO_DRIVER_BACKEND@
+# is substituted with whichever backend this exact package was built for.
+if [ "@YOLO_DRIVER_BACKEND@" = "tensorrt" ]; then
+    if command -v trtexec >/dev/null 2>&1; then
+        for onnx_model in "$MODEL_DIR"/*.onnx; do
+            [ -f "$onnx_model" ] || continue
+            trt_engine="${onnx_model%.onnx}.trt"
+            if [ ! -f "$trt_engine" ]; then
+                echo "qtrobot-yolo-driver: converting $onnx_model -> $trt_engine (trtexec, fp16)..."
+                trtexec --onnx="$onnx_model" --saveEngine="$trt_engine" --fp16
+            fi
+        done
+    else
+        echo "WARNING: trtexec not found — skipping TensorRT engine conversion." >&2
+        echo "         qtrobot-yolo-driver will fail to start until a matching" >&2
+        echo "         .trt engine is generated manually (see README)." >&2
+    fi
+fi
+
+systemctl daemon-reload
+systemctl enable qtrobot-yolo-driver.service
+systemctl restart qtrobot-yolo-driver.service || true
+
+exit 0
