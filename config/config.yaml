@@ -39,7 +39,7 @@ parameters:
         description: Stream camera image with pose skeleton drawn on it (port+2)
       - name: num_threads
         type: int
-        default: 2
+        default: 1
         scope: cli
         description: ONNX Runtime intra/inter-op thread count. 
 
