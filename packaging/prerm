@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+
+systemctl stop qtrobot-yolo-driver.service || true
+systemctl disable qtrobot-yolo-driver.service || true
+
+exit 0

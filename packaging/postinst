@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+mkdir -p /opt/luxai/qtrobot_yolo_driver/models
+
+systemctl daemon-reload
+systemctl enable qtrobot-yolo-driver.service
+systemctl restart qtrobot-yolo-driver.service || true
+
+exit 0

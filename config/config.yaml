@@ -1,0 +1,82 @@
+name: qtrobot-yolo-driver
+description: QTrobot YOLO pose detection + tracking driver
+
+parameters:
+  - name: log_level
+    type: string
+    value: INFO   # DEBUG, INFO, WARN
+    scope: cli
+
+  # Vision (YOLO pose detection)
+  - name: vision
+    type: group
+    description: Visual detection parameters
+    parameters:
+      - name: model
+        type: string
+        default: /opt/luxai/qtrobot_yolo_driver/models/yolo26n-pose.onnx
+        scope: cli
+        description: YOLO pose model file (.onnx)
+      - name: framerate
+        type: int
+        default: 5
+        scope: cli
+        description: Max detection framerate (Hz)
+      - name: confidence
+        type: double
+        default: 0.6
+        scope: cli
+        description: Minimum YOLO detection confidence
+      - name: image_size
+        type: int
+        default: 640
+        scope: cli
+        description: YOLO input image size (pixels, smaller = faster e.g. 320, 416, 640)
+      - name: stream_annotated_image
+        type: bool
+        default: false
+        scope: cli
+        description: Stream camera image with pose skeleton drawn on it (port+2)
+      - name: num_threads
+        type: int
+        default: 2
+        scope: cli
+        description: ONNX Runtime intra/inter-op thread count. 
+
+  # Inference device. NOTE: this config.yaml ships the same on both
+  # platforms; set device: cuda here (or via CLI) on Jetson installs once a
+  # CUDA-EP-enabled ONNX Runtime build is in place. Falls back to cpu
+  # automatically if CUDA isn't available in the linked ONNX Runtime build.
+  - name: device
+    type: string
+    default: cpu
+    scope: cli
+    description: Inference device - cpu or cuda
+
+  # Camera / RealSense driver connection
+  - name: camera
+    type: group
+    description: RealSense driver connection parameters
+    parameters:
+      - name: node_id
+        type: string
+        default: qtrobot-realsense-driver
+        description: Zeroconf node_id of the realsense driver service
+      - name: endpoint
+        type: string
+        default: "tcp://10.231.0.1:50750"
+        description: Direct ZMQ endpoint (overrides node_id if set), e.g. tcp://10.231.0.1:50750
+
+  # ZMQ communication (this service's own RPC and stream ports)
+  - name: zmq
+    type: group
+    description: ZMQ communication parameters
+    parameters:
+      - name: node_id
+        type: string
+        value: qtrobot-yolo-driver
+        description: Node id used for service discovery advertisement
+      - name: port
+        type: int
+        default: 50770
+        description: Base ZMQ RPC port. Persons stream is port+1, annotated image stream is port+2

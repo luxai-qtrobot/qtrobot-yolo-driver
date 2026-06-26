@@ -1,0 +1,14 @@
+[Unit]
+Description=QTrobot YOLO Pose Detection Driver
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/luxai/qtrobot_yolo_driver/bin/qtrobot_yolo_driver \
+    --config /opt/luxai/qtrobot_yolo_driver/etc/config.yaml
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
