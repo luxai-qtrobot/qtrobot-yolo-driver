@@ -53,6 +53,16 @@ parameters:
     scope: cli
     description: Inference device - cpu or cuda
 
+  # Depth estimation (depth_aligned image from the same realsense driver connection)
+  - name: depth
+    type: group
+    description: Per-keypoint depth estimation
+    parameters:
+      - name: enabled
+        type: bool
+        default: true
+        description: Subscribe to depth_aligned stream and publish per-keypoint depth (metres). Scale is fetched from the realsense driver at startup.
+
   # Camera / RealSense driver connection
   - name: camera
     type: group

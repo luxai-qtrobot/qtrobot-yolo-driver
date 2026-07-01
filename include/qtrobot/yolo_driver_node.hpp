@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include <qtrobot/yolo_driver_config.hpp>
 #include <qtrobot/pose_backend.hpp>
@@ -32,9 +34,10 @@ protected:
 
 private:
     magpie::Value onRequest(const magpie::Value& req);
-    std::string resolveCameraEndpoint();
-    magpie::Value buildPersonsValue(const std::vector<PersonDetection>& persons);
+    std::string resolveCameraStreamEndpoint(uint16_t portOffset);
+    magpie::Value buildPersonsValue(const std::vector<PersonDetection>& persons, const cv::Mat& depthImg);
     void writeAnnotatedImage(const cv::Mat& bgrImage, const std::vector<PersonDetection>& persons);
+    static float sampleDepth(const cv::Mat& depth16, int u, int v, int patch = 9);
 
 private:
     YoloDriverConfig config_;
@@ -50,6 +53,11 @@ private:
     std::unique_ptr<magpie::ZmqStreamWriter> personsWriter_;
     std::unique_ptr<magpie::ZmqStreamWriter> imageWriter_;
     std::unique_ptr<PoseBackend> backend_;
+    std::unique_ptr<magpie::ZmqStreamReader> depthReader_;
+    float depthScale_ = 0.001f; // fetched from realsense driver at startup
+
+    // Per-track per-keypoint EMA smoothed depth (metres). Keyed by trackId.
+    std::unordered_map<int, std::array<float, 17>> depthEma_;
 
     magpie::Value sysDescription_;
 };

@@ -5,13 +5,16 @@
 #include <cstdint>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
 #include <magpie/utils/logger.hpp>
 #include <magpie/frames/image_frame.hpp>
 #include <magpie/frames/primitive_frames.hpp>
+#include <magpie/transport/zmq_rpc_requester.hpp>
 #include <magpie/discovery/zconf_discovery.hpp>
 
 #include <paramify/paramify.hpp>
@@ -25,11 +28,12 @@ namespace qtrobot::yolo {
 
 namespace {
     // stream topics (ours)
-    constexpr const char* personsTopic = "/yolo/persons";
-    constexpr const char* imageTopic   = "/yolo/annotated_image";
+    constexpr const char* personsTopic = "/persons";
+    constexpr const char* imageTopic   = "/annotated_image";
 
-    // stream topic we consume from qtrobot-realsense-driver
-    constexpr const char* cameraColorTopic = "/camera/color/image";
+    // stream topics we consume from qtrobot-realsense-driver
+    constexpr const char* cameraColorTopic        = "/camera/color/image";
+    constexpr const char* cameraDepthAlignedTopic = "/camera/depth/aligned/image";
 
     // Standard COCO 17-keypoint skeleton, indices into COCO_KEYPOINTS — used
     // only for the optional annotated-image overlay.
@@ -66,16 +70,16 @@ YoloDriverNode::YoloDriverNode(
 {}
 
 
-std::string YoloDriverNode::resolveCameraEndpoint() {
+std::string YoloDriverNode::resolveCameraStreamEndpoint(uint16_t portOffset) {
     if (!config_.camera_endpoint.empty()) {
-        // camera_endpoint is the realsense driver's base RPC endpoint;
-        // its color stream is base port + 1 (see qtrobot-realsense-driver).
+        // camera_endpoint is the realsense driver's base RPC endpoint.
+        // Color stream = base+1, depth_aligned stream = base+2.
         auto colon = config_.camera_endpoint.find_last_of(':');
         uint16_t basePort = 0;
         if (colon != std::string::npos) {
             basePort = static_cast<uint16_t>(std::stoi(config_.camera_endpoint.substr(colon + 1)));
         }
-        return withPort(config_.camera_endpoint, static_cast<uint16_t>(basePort + 1));
+        return withPort(config_.camera_endpoint, static_cast<uint16_t>(basePort + portOffset));
     }
 
     ZconfDiscovery disc;
@@ -92,7 +96,27 @@ std::string YoloDriverNode::resolveCameraEndpoint() {
     }
 
     std::string ip = ZconfDiscovery::pick_best_ip(info);
-    return "tcp://" + ip + ":" + std::to_string(info.port + 1);
+    return "tcp://" + ip + ":" + std::to_string(info.port + portOffset);
+}
+
+
+float YoloDriverNode::sampleDepth(const cv::Mat& depth16, int u, int v, int patch) {
+    if (depth16.empty()) return 0.0f;
+    const int h = depth16.rows, w = depth16.cols;
+    u = std::clamp(u, patch, w - patch - 1);
+    v = std::clamp(v, patch, h - patch - 1);
+    std::vector<uint16_t> vals;
+    vals.reserve((2*patch+1) * (2*patch+1));
+    for (int r = v - patch; r <= v + patch; ++r) {
+        const uint16_t* row = depth16.ptr<uint16_t>(r);
+        for (int c = u - patch; c <= u + patch; ++c) {
+            if (row[c] > 0) vals.push_back(row[c]);
+        }
+    }
+    if (vals.empty()) return 0.0f;
+    auto mid = vals.begin() + vals.size() / 2;
+    std::nth_element(vals.begin(), mid, vals.end());
+    return static_cast<float>(*mid);
 }
 
 
@@ -134,11 +158,45 @@ void YoloDriverNode::setup()
         config_.model, config_.confidence, config_.image_size, config_.device == "cuda", config_.num_threads
     );
 
-    std::string cameraEndpoint = resolveCameraEndpoint();
+    std::string cameraEndpoint = resolveCameraStreamEndpoint(1);
     Logger::info("YoloDriverNode: reading camera color stream from " + cameraEndpoint);
     cameraReader_ = std::make_unique<ZmqStreamReader>(
         cameraEndpoint, cameraColorTopic, /*queueSize=*/1, /*bind=*/false, "latest"
     );
+
+    if (config_.depth_enabled) {
+        // Fetch the real depth scale from the realsense driver via RPC before
+        // opening the stream — avoids hardcoding a default that may differ per device.
+        try {
+            std::string rpcEndpoint = resolveCameraStreamEndpoint(0);
+            ZmqRpcRequester scaleReq(rpcEndpoint);
+            Value req = Value::fromDict({
+                {"name",  Value::fromString("/camera/depth/scale")},
+                {"args",  Value::fromDict({})}
+            });
+            Value resp = scaleReq.call(req, 5.0);
+            scaleReq.close();
+            const auto& respDict = resp.asDict();
+            if (respDict.count("status") && respDict.at("status").asBool() &&
+                respDict.count("response")) {
+                const auto& inner = respDict.at("response").asDict();
+                if (inner.count("scale")) {
+                    depthScale_ = static_cast<float>(inner.at("scale").asDouble());
+                }
+            }
+            Logger::info("YoloDriverNode: depth scale from realsense driver = " +
+                         std::to_string(depthScale_) + " m/unit");
+        } catch (const std::exception& e) {
+            Logger::warning(std::string("YoloDriverNode: could not fetch depth scale via RPC (") +
+                            e.what() + "), using default " + std::to_string(depthScale_));
+        }
+
+        std::string depthEndpoint = resolveCameraStreamEndpoint(2);
+        Logger::info("YoloDriverNode: reading depth_aligned stream from " + depthEndpoint);
+        depthReader_ = std::make_unique<ZmqStreamReader>(
+            depthEndpoint, cameraDepthAlignedTopic, /*queueSize=*/1, /*bind=*/false, "latest"
+        );
+    }
 
     personsWriter_ = std::make_unique<ZmqStreamWriter>(
         "tcp://*:" + std::to_string(streamPort_), 1, true, "latest"
@@ -203,6 +261,20 @@ void YoloDriverNode::process()
     Logger::debug("YoloDriverNode: running detection on " + std::to_string(bgr.cols) +
                   "x" + std::to_string(bgr.rows) + " frame");
 
+    // Non-blocking grab of the latest depth_aligned frame (timeout=0).
+    cv::Mat depthImg;
+    if (depthReader_ != nullptr) {
+        std::unique_ptr<Frame> depthFrame;
+        std::string depthTopic;
+        if (depthReader_->read(depthFrame, depthTopic, 0.0) && depthFrame) {
+            auto* dImg = dynamic_cast<ImageFrameRaw*>(depthFrame.get());
+            if (dImg && dImg->channels() == 1) {
+                depthImg = cv::Mat(dImg->height(), dImg->width(), CV_16UC1,
+                                   const_cast<void*>(static_cast<const void*>(dImg->data().data()))).clone();
+            }
+        }
+    }
+
     auto persons = backend_->detect(bgr);
     Logger::debug("YoloDriverNode: detected " + std::to_string(persons.size()) + " person(s)");
     for (const auto& p : persons) {
@@ -214,8 +286,19 @@ void YoloDriverNode::process()
              << " nose_uv=[" << nose.u << "," << nose.v << "] nose_conf=" << nose.confidence;
         Logger::debug(pLog.str());
     }
+
+    // Evict stale track IDs from depth EMA map.
+    if (!depthEma_.empty()) {
+        std::unordered_map<int, std::array<float, 17>> keep;
+        for (const auto& p : persons) {
+            auto it = depthEma_.find(p.trackId);
+            if (it != depthEma_.end()) keep.insert(*it);
+        }
+        depthEma_.swap(keep);
+    }
+
     if (!persons.empty()) {
-        personsWriter_->write(DictFrame(buildPersonsValue(persons).asDict()), personsTopic);
+        personsWriter_->write(DictFrame(buildPersonsValue(persons, depthImg).asDict()), personsTopic);
     }
 
     if (imageWriter_ != nullptr) {
@@ -228,14 +311,20 @@ void YoloDriverNode::cleanup()
 {
     Logger::info("YoloDriverNode: cleanup");
     if (cameraReader_ != nullptr) { cameraReader_->close(); }
+    if (depthReader_  != nullptr) { depthReader_->close(); }
     if (personsWriter_ != nullptr) { personsWriter_->close(); }
     if (imageWriter_ != nullptr) { imageWriter_->close(); }
     if (server_ != nullptr) { server_->terminate(); }
 }
 
 
-magpie::Value YoloDriverNode::buildPersonsValue(const std::vector<PersonDetection>& persons)
+magpie::Value YoloDriverNode::buildPersonsValue(
+    const std::vector<PersonDetection>& persons,
+    const cv::Mat& depthImg)
 {
+    constexpr float kDepthEmaAlpha = 0.4f;
+    const bool haveDepth = config_.depth_enabled && !depthImg.empty();
+
     Value::Dict personsDict;
 
     for (const auto& p : persons) {
@@ -249,15 +338,32 @@ magpie::Value YoloDriverNode::buildPersonsValue(const std::vector<PersonDetectio
         personEntry["bbox"] = Value::fromList(bbox);
         personEntry["confidence"] = Value::fromDouble(p.confidence);
 
+        // Depth EMA state for this track (initialised to 0 = no reading yet).
+        auto& ema = depthEma_[p.trackId];
+
         Value::Dict keypointsDict;
         for (size_t k = 0; k < COCO_KEYPOINTS.size(); ++k) {
             const auto& kp = p.keypoints[k];
             Value::Dict kpEntry;
+
             Value::List uv;
             uv.push_back(Value::fromDouble(kp.u));
             uv.push_back(Value::fromDouble(kp.v));
             kpEntry["uv"] = Value::fromList(uv);
             kpEntry["conf"] = Value::fromDouble(kp.confidence);
+
+            if (haveDepth) {
+                float raw = sampleDepth(depthImg, static_cast<int>(kp.u), static_cast<int>(kp.v));
+                if (raw > 0.0f) {
+                    float rawM = raw * depthScale_;
+                    ema[k] = (ema[k] > 0.0f)
+                             ? kDepthEmaAlpha * rawM + (1.0f - kDepthEmaAlpha) * ema[k]
+                             : rawM;
+                }
+                // Publish smoothed depth if we have a reading, otherwise -1 (no valid depth).
+                kpEntry["depth"] = Value::fromDouble(ema[k] > 0.0f ? ema[k] : -1.0);
+            }
+
             keypointsDict[COCO_KEYPOINTS[k]] = Value::fromDict(kpEntry);
         }
         personEntry["keypoints"] = Value::fromDict(keypointsDict);
@@ -370,6 +476,7 @@ int main(int argc, char** argv) {
         config.stream_annotated_image = (bool) params["vision.stream_annotated_image"];
         config.num_threads = (int64_t) params["vision.num_threads"];
         config.device      = params.get_string("device");
+        config.depth_enabled = (bool) params["depth.enabled"];
         config.camera_node_id = params.get_string("camera.node_id");
         config.camera_endpoint = params.get_string("camera.endpoint");
         config.zmq_port  = (uint16_t) params.get_int("zmq.port");

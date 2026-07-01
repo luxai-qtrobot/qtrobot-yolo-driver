@@ -38,8 +38,8 @@ component.
 | Purpose | Port | Topic |
 |---|---|---|
 | RPC | 50770 | — |
-| Persons stream | 5781 | `/yolo/persons` |
-| Annotated image stream (optional) | 5782 | `/yolo/annotated_image` |
+| Persons stream | 50771 | `/persons` |
+| Annotated image stream (optional) | 50772 | `/annotated_image` |
 
 The service advertises itself via Zeroconf under node ID **`qtrobot-yolo-driver`**,
 and consumes the color image stream from `qtrobot-realsense-driver` (via
@@ -58,8 +58,12 @@ Each frame published on `/yolo/persons` is a `DictFrame`:
       "bbox":       [x1, y1, x2, y2],     # pixels, image frame
       "confidence": float,                # YOLO detection confidence
       "keypoints": {
-        "nose":           {"uv": [u, v], "conf": float},
-        "left_eye":       {"uv": [u, v], "conf": float},
+        "nose": {
+          "uv":    [u, v],               # pixel coordinates
+          "conf":  float,                # keypoint confidence
+          "depth": float,                # metres from camera (EMA-smoothed); -1.0 if no valid reading;
+                                         # absent when depth.enabled=false
+        },
         # ... 17 COCO keypoints total (see below)
       }
     }

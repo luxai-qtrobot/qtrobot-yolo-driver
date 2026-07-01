@@ -18,6 +18,9 @@ struct YoloDriverConfig {
     // ---------- Device ----------
     std::string device = "cpu";       // cpu | cuda - passed straight to YOLOPoseDetector's useGPU flag
 
+    // ---------- Depth ----------
+    bool depth_enabled = true; // subscribe to depth_aligned stream and attach depth per keypoint
+
     // ---------- Camera (qtrobot-realsense-driver connection) ----------
     std::string camera_node_id = "qtrobot-realsense-driver"; // Zeroconf discovery
     std::string camera_endpoint;                              // direct override, e.g. tcp://10.0.0.5:50655
@@ -79,6 +82,17 @@ parameters:
     default: cpu
     scope: cli
     description: Inference device - cpu or cuda. Falls back to cpu automatically if CUDA is requested but unavailable in the linked ONNX Runtime build.
+
+  # Depth estimation (depth_aligned image from the same realsense driver connection)
+  - name: depth
+    type: group
+    description: Per-keypoint depth estimation from realsense depth_aligned stream
+    parameters:
+      - name: enabled
+        type: bool
+        default: true
+        scope: cli
+        description: Subscribe to depth_aligned stream and publish per-keypoint depth (metres). Scale factor is fetched automatically from the realsense driver at startup.
 
   # Camera / RealSense driver connection
   - name: camera
