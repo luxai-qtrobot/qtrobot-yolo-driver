@@ -179,10 +179,7 @@ void YoloDriverNode::setup()
             const auto& respDict = resp.asDict();
             if (respDict.count("status") && respDict.at("status").asBool() &&
                 respDict.count("response")) {
-                const auto& inner = respDict.at("response").asDict();
-                if (inner.count("scale")) {
-                    depthScale_ = static_cast<float>(inner.at("scale").asDouble());
-                }
+                depthScale_ = static_cast<float>(respDict.at("response").asDouble());
             }
             Logger::info("YoloDriverNode: depth scale from realsense driver = " +
                          std::to_string(depthScale_) + " m/unit");
@@ -268,7 +265,7 @@ void YoloDriverNode::process()
         std::string depthTopic;
         if (depthReader_->read(depthFrame, depthTopic, 0.0) && depthFrame) {
             auto* dImg = dynamic_cast<ImageFrameRaw*>(depthFrame.get());
-            if (dImg && dImg->channels() == 1) {
+            if (dImg && dImg->channels() == 2) {
                 depthImg = cv::Mat(dImg->height(), dImg->width(), CV_16UC1,
                                    const_cast<void*>(static_cast<const void*>(dImg->data().data()))).clone();
             }
